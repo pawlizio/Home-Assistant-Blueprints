@@ -1,0 +1,543 @@
+# ══════════════════════════════════════════════════════════════════════════════
+#  Home Assistant Automation Blueprint
+#  EnOcean PTM215Z (Friends of Hue) – Zigbee2MQTT
+#  Gerätesteuerung: Kurzdruck (Toggle) · Halten (Dim/Tilt) · Wiederholt (Szenen)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+#  INSTALLATION
+#  ────────────
+#  1. Diese Datei nach config/blueprints/automation/ kopieren.
+#  2. In Z2M → Einstellungen → Erweitert: "elapsed" aktivieren  ← PFLICHT
+#  3. In HA: Einstellungen → Automationen → Automation erstellen →
+#     "Blueprint" auswählen → dieses Blueprint wählen.
+#  4. Nur 3 Zuordnungen notwendig:
+#     - Wippe 1 (Links) → Gerät auswählen
+#     - Wippe 2 (Rechts) → Gerät auswählen
+#     - Wippe 1+2 (Beide) → Gerät auswählen
+#
+#  FUNKTIONSWEISE
+#  ──────────────
+#  Jede Wippe kann mit einem Gerät (Lampe oder Rollladen) verbunden werden.
+#  Die obere Taste der Wippe erhöht, die untere reduziert.
+#
+#  ┌────────────────────────────────────────────────────────────────────────┐
+#  │  Aktion                  │  Verhalten                                  │
+#  ├──────────────────────────┼─────────────────────────────────────────────┤
+#  │  Kurzdruck               │  elapsed ≥ repeat_threshold                 │
+#  │  (erste Betätigung)      │  → Toggle Gerät (an/aus)                    │
+#  ├──────────────────────────┼─────────────────────────────────────────────┤
+#  │  Wiederholter Druck      │  elapsed < repeat_threshold                 │
+#  │  (erneut innerhalb ~4s)  │  → Nächste LRU-Szene aktivieren            │
+#  ├──────────────────────────┼─────────────────────────────────────────────┤
+#  │  Halten oben             │  Helligkeit/Position erhöhen → Stop Release │
+#  │  Halten unten            │  Helligkeit/Position reduzieren → Stop      │
+#  └──────────────────────────┴─────────────────────────────────────────────┘
+#
+#  SZENEN-LOGIK (Wiederholter Druck)
+#  ───────────────────────────────────
+#  Kein externer Zähler / Helper nötig.
+#  HA speichert den Zeitstempel der letzten Aktivierung als state jeder Szene.
+#  Der Blueprint wählt immer die Szene, die am längsten nicht aktiv war (LRU).
+#  Szenen die noch nie aktiviert wurden, gelten als "älteste".
+#  Werden Szenen auch durch andere Automationen aktiviert, wird das automatisch
+#  berücksichtigt – kein manueller Reset nötig.
+#
+#  WIPPEN-MAPPING
+#  ──────────────
+#  Wippe 1 (Links):
+#    - Taste 1 (A0, oben)  → Erhöhen / Toggle
+#    - Taste 2 (A1, unten) → Reduzieren / Toggle
+#
+#  Wippe 2 (Rechts):
+#    - Taste 3 (B0, oben)  → Erhöhen / Toggle
+#    - Taste 4 (B1, unten) → Reduzieren / Toggle
+#
+#  Wippen 1+2 (Beide):
+#    - Tasten 1+3 (oben)   → Erhöhen / Toggle
+#    - Tasten 2+4 (unten)  → Reduzieren / Toggle
+#
+# ══════════════════════════════════════════════════════════════════════════════
+
+blueprint:
+  name: "Z2M – Friends of Hue - Smart Switch (Licht/Rollladen)"
+  description: >
+    Gerätesteuerung (Licht/Rollladen) mit dem EnOcean PTM215Z (Friends of Hue)
+    über Zigbee2MQTT. Nur 3 Konfigurationen:
+    - Wippe 1 (Links) → Gerät 1
+    - Wippe 2 (Rechts) → Gerät 2
+    - Wippe 1+2 (Beide) → Gerät 3
+
+    Jede Wippe:
+    - Kurzdruck (erste Betätigung): Toggle
+    - Wiederholter Druck (innerhalb repeat_threshold): LRU-Szene aktivieren
+    - Oben halten: Erhöhen (Helligkeit/Position) → Auto-Stop bei Release
+    - Unten halten: Reduzieren (Helligkeit/Position) → Auto-Stop bei Release
+
+    Benötigt: Z2M "elapsed" aktiviert (Einstellungen → Erweitert)
+  domain: automation
+
+  input:
+
+    # ── Gerät & Topic ──────────────────────────────────────────────────────
+    controller:
+      name: Gerätename in Zigbee2MQTT
+      description: >
+        Name des Schalters exakt wie in Z2M konfiguriert.
+        Beispiel: "Wohnzimmer Schalter"
+
+    base_topic:
+      name: Zigbee2MQTT Base-Topic
+      description: Das in Z2M konfigurierte Basis-Topic (ohne abschließenden Schrägstrich).
+      default: zigbee2mqtt
+
+    # ── Zeitparameter ──────────────────────────────────────────────────────
+    hold_threshold:
+      name: Halte-Schwelle (ms)
+      description: >
+        Zeit in ms, nach der Halten erkannt wird (wenn keine Release innerhalb
+        dieser Zeit kommt).
+      default: 300
+      selector:
+        number:
+          min: 100
+          max: 1000
+          unit_of_measurement: ms
+          step: 50
+          mode: slider
+
+    repeat_threshold:
+      name: Wiederholungs-Schwelle (ms)
+      description: >
+        Zeit in ms seit der letzten Betätigung, innerhalb derer ein erneuter
+        Druck als "wiederholter Druck" gilt und eine Szene aktiviert.
+        Liegt elapsed darüber, wird Toggle ausgeführt.
+        Empfehlung: 1000–2000ms.
+      default: 1500
+      selector:
+        number:
+          min: 500
+          max: 5000
+          unit_of_measurement: ms
+          step: 500
+          mode: slider
+
+    hold_step:
+      name: Dimm/Tilt-Schritte pro 100ms
+      description: >
+        Beim Halten: Um wie viel % (Lampe) oder Einheiten (Rollladen)
+        wird der Wert pro 100ms erhöht/reduziert?
+      default: 5
+      selector:
+        number:
+          min: 1
+          max: 20
+          unit_of_measurement: "%"
+          step: 1
+          mode: slider
+
+    # ════════════════════════════════════════════════════════════════════════
+    # WIPPE 1 (LINKS) – Tasten 1 & 2
+    # ════════════════════════════════════════════════════════════════════════
+    wippe_1_device:
+      name: "Wippe 1 (Links): Gerät"
+      description: >
+        Gerät (Lampe oder Rollladen) das mit der linken Wippe gesteuert wird.
+        Optional – leer lassen um deaktivieren.
+      default: {}
+      selector:
+        entity:
+          domain:
+            - light
+            - cover
+          multiple: false
+
+    wippe_1_scenes:
+      name: "Wippe 1 (Links): Szenen (für wiederholten Druck)"
+      description: >
+        Szenen die beim wiederholten Druck aktiviert werden (LRU-Logik).
+        Optional – leer lassen wenn keine Szenen gewünscht.
+      default: []
+      selector:
+        entity:
+          domain: scene
+          multiple: true
+
+    # ════════════════════════════════════════════════════════════════════════
+    # WIPPE 2 (RECHTS) – Tasten 3 & 4
+    # ════════════════════════════════════════════════════════════════════════
+    wippe_2_device:
+      name: "Wippe 2 (Rechts): Gerät"
+      description: >
+        Gerät (Lampe oder Rollladen) das mit der rechten Wippe gesteuert wird.
+        Optional – leer lassen um deaktivieren.
+      default: {}
+      selector:
+        entity:
+          domain:
+            - light
+            - cover
+          multiple: false
+
+    wippe_2_scenes:
+      name: "Wippe 2 (Rechts): Szenen (für wiederholten Druck)"
+      description: >
+        Szenen die beim wiederholten Druck aktiviert werden (LRU-Logik).
+        Optional – leer lassen wenn keine Szenen gewünscht.
+      default: []
+      selector:
+        entity:
+          domain: scene
+          multiple: true
+
+    # ════════════════════════════════════════════════════════════════════════
+    # WIPPE 1+2 (BEIDE) – Tasten 1+3 & 2+4
+    # ════════════════════════════════════════════════════════════════════════
+    wippe_both_device:
+      name: "Wippen 1+2 (Beide): Gerät"
+      description: >
+        Gerät (Lampe oder Rollladen) das bei gemeinsamer Betätigung beider
+        Wippen gesteuert wird.
+        Optional – leer lassen um deaktivieren.
+      default: {}
+      selector:
+        entity:
+          domain:
+            - light
+            - cover
+          multiple: false
+
+    wippe_both_scenes:
+      name: "Wippen 1+2 (Beide): Szenen (für wiederholten Druck)"
+      description: >
+        Szenen die beim wiederholten Druck aktiviert werden (LRU-Logik).
+        Optional – leer lassen wenn keine Szenen gewünscht.
+      default: []
+      selector:
+        entity:
+          domain: scene
+          multiple: true
+
+# ── Automation-Konfiguration ──────────────────────────────────────────────────
+
+mode: single
+max_exceeded: silent
+
+variables:
+  hold_threshold: !input hold_threshold
+  repeat_threshold: !input repeat_threshold
+  hold_step: !input hold_step
+  wippe_1_device: !input wippe_1_device
+  wippe_2_device: !input wippe_2_device
+  wippe_both_device: !input wippe_both_device
+  wippe_1_scenes: !input wippe_1_scenes
+  wippe_2_scenes: !input wippe_2_scenes
+  wippe_both_scenes: !input wippe_both_scenes
+
+trigger_variables:
+  base_topic: !input base_topic
+  controller: !input controller
+
+trigger:
+  - platform: mqtt
+    topic: "{{ base_topic }}/{{ controller }}"
+
+condition:
+  - condition: template
+    value_template: >
+      {{ trigger.payload_json.action is defined and
+         'press_' in trigger.payload_json.action }}
+
+action:
+  # Wippe, Richtung und elapsed aus dem Payload bestimmen
+  - variables:
+      wippe: >
+        {% if trigger.payload_json.action in ['press_1', 'press_2'] %}wippe_1
+        {% elif trigger.payload_json.action in ['press_3', 'press_4'] %}wippe_2
+        {% elif trigger.payload_json.action in ['press_1_and_3', 'press_2_and_4'] %}wippe_both
+        {% else %}unknown
+        {% endif %}
+      direction: >
+        {% if trigger.payload_json.action in ['press_1', 'press_3', 'press_1_and_3'] %}up
+        {% else %}down
+        {% endif %}
+      # elapsed: ms seit letztem MQTT-Event dieses Geräts.
+      # Default 999999 wenn elapsed fehlt (z.B. Z2M-Option nicht aktiviert)
+      # → verhindert versehentliche Szenenaktivierung ohne elapsed.
+      elapsed: >
+        {{ trigger.payload_json.elapsed | default(999999) | int }}
+      # Gerät für diese Wippe bestimmen
+      target_device: >
+        {% if wippe == 'wippe_1' %}{{ wippe_1_device }}
+        {% elif wippe == 'wippe_2' %}{{ wippe_2_device }}
+        {% else %}{{ wippe_both_device }}
+        {% endif %}
+      # Szenen für diese Wippe bestimmen
+      target_scenes: >
+        {% if wippe == 'wippe_1' %}{{ wippe_1_scenes }}
+        {% elif wippe == 'wippe_2' %}{{ wippe_2_scenes }}
+        {% else %}{{ wippe_both_scenes }}
+        {% endif %}
+      # Device-Typ bestimmen (light oder cover)
+      device_type: >
+        {% if target_device != '' and states[target_device] is not none %}
+          {% if target_device.startswith('light.') %}light
+          {% elif target_device.startswith('cover.') %}cover
+          {% else %}unknown
+          {% endif %}
+        {% else %}none
+        {% endif %}
+      # Expected Release Action (z.B. "press_1" → "release_1")
+      expected_release: "{{ trigger.payload_json.action | replace('press_', 'release_') }}"
+      # Wiederholter Druck? → elapsed unter Schwelle UND Szenen konfiguriert
+      is_repeated_press: >
+        {{ elapsed < repeat_threshold and target_scenes | length > 0 }}
+
+  # ════════════════════════════════════════════════════════════════════════
+  # PHASE 1 – Halte-Erkennung
+  # Warte auf release_N (max. hold_threshold ms)
+  # ════════════════════════════════════════════════════════════════════════
+  - wait_for_trigger:
+      - platform: mqtt
+        topic: "{{ base_topic }}/{{ controller }}"
+    timeout:
+      milliseconds: "{{ hold_threshold }}"
+    continue_on_timeout: true
+
+  - choose:
+
+      # ┌──────────────────────────────────────────────────────────────────┐
+      # │  HALTEN (Hold) – Erhöhen/Reduzieren                             │
+      # │  Timeout: kein release innerhalb der Halte-Schwelle.            │
+      # └──────────────────────────────────────────────────────────────────┘
+      - conditions: >
+          {{ not wait.completed and device_type != 'none' }}
+        sequence:
+          - choose:
+
+              # Cover: einmal open/close senden, dann auf Release warten → stop
+              - conditions: "{{ device_type == 'cover' }}"
+                sequence:
+                  - choose:
+                      - conditions: "{{ direction == 'up' }}"
+                        sequence:
+                          - service: cover.open_cover
+                            target:
+                              entity_id: "{{ target_device }}"
+                      - conditions: "{{ direction == 'down' }}"
+                        sequence:
+                          - service: cover.close_cover
+                            target:
+                              entity_id: "{{ target_device }}"
+                  - variables:
+                      release_detected: false
+                  - repeat:
+                      until: "{{ release_detected }}"
+                      sequence:
+                        - wait_for_trigger:
+                            - platform: mqtt
+                              topic: "{{ base_topic }}/{{ controller }}"
+                          timeout:
+                            milliseconds: 100
+                          continue_on_timeout: true
+                        - variables:
+                            release_detected: >
+                              {{ wait.trigger is not none and
+                                 wait.trigger.payload_json.action is defined and
+                                 wait.trigger.payload_json.action == expected_release }}
+                  - service: cover.stop_cover
+                    target:
+                      entity_id: "{{ target_device }}"
+
+            # Light: wiederholtes Dimmen bis Release kommt
+            default:
+              - variables:
+                  release_received: false
+              - repeat:
+                  until: "{{ release_received or repeat.index > 200 }}"
+                  sequence:
+                    - service: light.turn_on
+                      target:
+                        entity_id: "{{ target_device }}"
+                      data:
+                        brightness_step_pct: "{% if direction == 'up' %}{{ hold_step }}{% else %}{{ -hold_step }}{% endif %}"
+                    - wait_for_trigger:
+                        - platform: mqtt
+                          topic: "{{ base_topic }}/{{ controller }}"
+                      timeout:
+                        milliseconds: 150
+                      continue_on_timeout: true
+                    - variables:
+                        release_received: >
+                          {{ release_received or (
+                             wait.trigger is not none and
+                             wait.trigger.payload_json.action is defined and
+                             wait.trigger.payload_json.action == expected_release) }}
+
+    # ┌──────────────────────────────────────────────────────────────────────┐
+    # │  Release kam rechtzeitig → Kurzdruck oder wiederholter Druck?      │
+    # │  Entscheidung anhand von elapsed – sofort, kein Timeout nötig.     │
+    # └──────────────────────────────────────────────────────────────────────┘
+    default:
+      - choose:
+
+          # ┌────────────────────────────────────────────────────────────────┐
+          # │  WIEDERHOLTER DRUCK – LRU-Szene aktivieren                    │
+          # │  elapsed < repeat_threshold → kürzlich schon betätigt         │
+          # └────────────────────────────────────────────────────────────────┘
+          - conditions: "{{ is_repeated_press and direction == 'up' }}"
+            sequence:
+              - variables:
+                  scene_to_activate: >
+                    {% set ns = namespace(scene=target_scenes[0], oldest=now()) %}
+                    {% for s in target_scenes %}
+                      {% set t = states(s) %}
+                      {% if t in ['unknown', 'unavailable'] %}
+                        {# Noch nie aktiviert → definitiv älteste #}
+                        {% set ns.scene = s %}
+                        {% set ns.oldest = as_datetime('1970-01-01 00:00:00+00:00') %}
+                      {% elif ns.oldest > as_datetime('1970-01-01 00:00:00+00:00') %}
+                        {# Nur prüfen wenn noch keine "nie aktivierte" Szene gefunden #}
+                        {% set scene_time = t | as_datetime %}
+                        {% if scene_time < ns.oldest %}
+                          {% set ns.oldest = scene_time %}
+                          {% set ns.scene = s %}
+                        {% endif %}
+                      {% endif %}
+                    {% endfor %}
+                    {{ ns.scene }}
+
+              - service: scene.turn_on
+                target:
+                  entity_id: "{{ scene_to_activate }}"
+
+        # ┌──────────────────────────────────────────────────────────────────┐
+        # │  KURZDRUCK – Toggle Gerät                                       │
+        # │  elapsed ≥ repeat_threshold → erste / neue Betätigung           │
+        # └──────────────────────────────────────────────────────────────────┘
+        default:
+          - choose:
+              - conditions: "{{ device_type == 'light' }}"
+                sequence:
+                  - service: light.toggle
+                    target:
+                      entity_id: "{{ target_device }}"
+              - conditions: "{{ device_type == 'cover' and direction == 'up' }}"
+                sequence:
+                  - service: cover.open_cover
+                    target:
+                      entity_id: "{{ target_device }}"
+              - conditions: "{{ device_type == 'cover' and direction == 'down' }}"
+                sequence:
+                  - service: cover.close_cover
+                    target:
+                      entity_id: "{{ target_device }}"
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  INTERNE LOGIK ERKLÄRUNG
+# ══════════════════════════════════════════════════════════════════════════════
+#
+#  ELAPSED-BASIERTE ERKENNUNG
+#  ──────────────────────────
+#  Z2M liefert in jedem MQTT-Payload das Feld "elapsed": Zeit in ms seit der
+#  letzten Nachricht desselben Geräts. Der Blueprint nutzt diesen Wert um
+#  sofort – ohne Timeout – zu entscheiden ob Toggle oder Szene ausgeführt wird.
+#
+#  elapsed ≥ repeat_threshold (Standard: 4000ms)
+#    → Gerät war längere Zeit unberührt → erste / neue Betätigung → Toggle
+#
+#  elapsed < repeat_threshold
+#    → Kürzlich betätigt → wiederholter Druck → LRU-Szene aktivieren
+#
+#  Kein Warten in Phase 2 mehr → Toggle reagiert sofort.
+#
+#  Fehlt elapsed im Payload (Z2M-Option nicht aktiviert):
+#    → default 999999ms → immer Toggle → Szenen nie aktiviert
+#    → Lösung: Z2M "elapsed" in Einstellungen → Erweitert aktivieren
+#
+#  ZWEI-PHASEN-ERKENNUNG
+#  ──────────────────────
+#
+#  PHASE 1 – HALTE-ERKENNUNG (Standard: 500ms Timeout):
+#    ├─ press-Event kommt
+#    ├─ Blueprint wartet auf MQTT-Event (max. hold_threshold ms)
+#    ├─ KEIN Event (Timeout)?
+#    │   → HALTEN erkannt
+#    │   → Cover: open/close einmal → warten bis Release → stop
+#    │   → Light: brightness_step_pct in 100ms-Schritten bis Release
+#    └─ Event kam (Release)?
+#        → sofortige Entscheidung anhand elapsed
+#
+#  KURZDRUCK / WIEDERHOLTER DRUCK (sofort, kein Timeout):
+#    ├─ is_repeated_press = true (elapsed < repeat_threshold + Szenen vorhanden)
+#    │   → LRU-Szene aktivieren
+#    └─ is_repeated_press = false
+#        → Toggle / open / close
+#
+#  LRU-SZENEN-LOGIK
+#  ────────────────
+#  HA speichert den Zeitstempel der letzten Aktivierung als state jeder Szene.
+#  Beim wiederholten Druck wird die Szene mit dem ältesten Zeitstempel gewählt.
+#  Szenen mit state 'unknown' oder 'unavailable' (nie aktiviert) haben Vorrang.
+#
+#  Beispiel mit 3 Szenen (repeat_threshold: 4000ms):
+#    Szene A: 10:15  │  Szene B: 10:45  │  Szene C: unknown
+#
+#    10:00:00 → Druck  (elapsed 60000ms) → Toggle   (Licht an)
+#    10:00:01 → Druck  (elapsed 1000ms)  → Szene C  (unknown = nie aktiviert)
+#    10:00:03 → Druck  (elapsed 2000ms)  → Szene A  (10:15 < 10:45)
+#    10:00:05 → Druck  (elapsed 2000ms)  → Szene B  (älteste verbleibende)
+#    10:01:00 → Druck  (elapsed 55000ms) → Toggle   (neue Betätigung)
+#
+#  ZEITABLAUF BEISPIELE
+#  ─────────────────────
+#
+#  Erster Druck (Toggle):
+#    0ms    → press_1 (elapsed = 60000ms ≥ 4000ms)
+#    300ms  → release_1
+#    → light.toggle() sofort ✓
+#
+#  Wiederholter Druck (Szene):
+#    0ms    → press_1 (elapsed = 60000ms → Toggle, Licht geht an)
+#    300ms  → release_1
+#    ...Nutzer schaut, Licht zu hell...
+#    2500ms → press_1 (elapsed ≈ 2500ms < 4000ms → Szene!)
+#    2800ms → release_1
+#    → scene.turn_on(LRU-Szene) sofort ✓
+#
+#  Halten (Dimmen):
+#    0ms    → press_1
+#    500ms  → TIMEOUT → HALTEN erkannt → Dimmen-Loop
+#    2400ms → release_1 → Stop
+#
+# ══════════════════════════════════════════════════════════════════════════════
+#  TROUBLESHOOTING
+# ══════════════════════════════════════════════════════════════════════════════
+#
+#  PROBLEM: Szenen werden nie aktiviert, immer Toggle
+#  ────────────────────────────────────────────────────
+#    → Z2M "elapsed" aktiviert? (Einstellungen → Erweitert) ← PFLICHT
+#    → Ohne elapsed: default 999999ms → immer Toggle, nie Szene
+#    → repeat_threshold ggf. erhöhen (Standard: 4000ms)
+#    → Test: MQTT Explorer → payload prüfen ob "elapsed" enthalten ist
+#
+#  PROBLEM: Szenen werden zu oft aktiviert statt Toggle
+#  ─────────────────────────────────────────────────────
+#    → repeat_threshold verringern (z.B. 2000ms)
+#
+#  PROBLEM: Halten wird nicht erkannt
+#  ────────────────────────────────────
+#    → Gerät für diese Wippe konfiguriert?
+#    → Logs: Einstellungen → Automationen → Automation → Traces
+#
+#  PROBLEM: Kurzdruck funktioniert nicht
+#  ───────────────────────────────────────
+#    → Controller-Name exakt wie in Z2M?
+#    → Base-Topic korrekt? (Standard: zigbee2mqtt)
+#    → Test: MQTT Explorer → zigbee2mqtt/[Geräte-Name]
+#
+#  PROBLEM: Automation bleibt hängen
+#  ────────────────────────────────────
+#    → Mode ist "single" → parallele Auslösung wird ignoriert (normal)
+#    → Max. Wartezeit: 200 * 100ms = ~20s (Dimmen ohne Release)
+#
+# ══════════════════════════════════════════════════════════════════════════════
