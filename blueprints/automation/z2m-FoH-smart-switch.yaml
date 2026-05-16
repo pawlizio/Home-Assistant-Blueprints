@@ -23,7 +23,8 @@
 #  │                          │    Licht AUS → einschalten                  │
 #  │                          │    Licht AN  → nächste LRU-Szene            │
 #  │                          │               (falls Szenen konfiguriert)   │
-#  │                          │               sonst: einschalten (no-op)    │
+#  │                          │               sonst: +25% Helligkeit        │
+#  │                          │               (Wrap: nach 100% → 1%)        │
 #  ├──────────────────────────┼─────────────────────────────────────────────┤
 #  │  Kurzdruck Unten         │  Tastenszene konfiguriert:                  │
 #  │                          │    → Szene aktivieren                       │
@@ -78,95 +79,12 @@ blueprint:
         text:
 
     # ════════════════════════════════════════════════════════════════════════
-    # SEKTION: ERWEITERTE EINSTELLUNGEN
-    # ════════════════════════════════════════════════════════════════════════
-    section_advanced:
-      name: "🔧 Erweiterte Einstellungen"
-      icon: mdi:wrench
-      collapsed: true
-      input:
-
-        base_topic:
-          name: Zigbee2MQTT Base-Topic
-          description: Das in Z2M konfigurierte Basis-Topic (ohne abschließenden Schrägstrich).
-          default: zigbee2mqtt
-          selector:
-            text:
-
-        hold_threshold:
-          name: Halte-Schwelle (ms)
-          description: >
-            Zeit in ms ohne Release, nach der Halten erkannt wird.
-          default: 300
-          selector:
-            number:
-              min: 100
-              max: 2000
-              unit_of_measurement: ms
-              step: 50
-              mode: slider
-
-        hold_step:
-          name: Dimm-Schrittweite (%)
-          description: >
-            Step-Loop Modus: Um wie viel % Helligkeit pro Schritt gedimmt wird.
-            Nicht relevant wenn brightness_move verwendet wird.
-          default: 5
-          selector:
-            number:
-              min: 1
-              max: 20
-              unit_of_measurement: "%"
-              step: 1
-              mode: slider
-
-        dim_interval:
-          name: Dimm-Intervall (ms)
-          description: >
-            Step-Loop Modus: Pause zwischen zwei Dimm-Schritten.
-            Höhere Werte = weniger Bus-Last, langsameres Dimmen.
-            Nicht relevant wenn brightness_move verwendet wird.
-          default: 150
-          selector:
-            number:
-              min: 50
-              max: 1000
-              unit_of_measurement: ms
-              step: 25
-              mode: slider
-
-        brightness_move_speed:
-          name: brightness_move Geschwindigkeit (units/s)
-          description: >
-            Geschwindigkeit beim Dimmen via brightness_move (nur für Z2M MQTT-Lampen).
-            Einheit: Zigbee-Helligkeitseinheiten/Sekunde (Bereich 0–254).
-            Beispiel: 100 = ca. 2,5 Sekunden von 0 auf 100%.
-          default: 100
-          selector:
-            number:
-              min: 10
-              max: 254
-              unit_of_measurement: units/s
-              step: 5
-              mode: slider
-
-        force_step_loop:
-          name: Immer Step-Loop verwenden
-          description: >
-            Wenn aktiviert, wird auch bei MQTT-Lampen der Step-Loop
-            (brightness_step_pct) verwendet statt brightness_move.
-            Nützlich wenn brightness_move vom Gerät nicht unterstützt wird.
-          default: false
-          selector:
-            boolean:
-
-    # ════════════════════════════════════════════════════════════════════════
     # SEKTION: WIPPE LINKS – Tasten 1 (oben) & 2 (unten)
     # ════════════════════════════════════════════════════════════════════════
     section_wippe_1:
       name: "◀ Wippe Links"
       icon: mdi:gesture-tap-button
-      collapsed: false
+      collapsed: true
       input:
 
         wippe_1_device:
@@ -261,7 +179,7 @@ blueprint:
     section_wippe_2:
       name: "▶ Wippe Rechts"
       icon: mdi:gesture-tap-button
-      collapsed: false
+      collapsed: true
       input:
 
         wippe_2_device:
@@ -405,6 +323,104 @@ blueprint:
               domain: scene
               multiple: true
 
+    # ════════════════════════════════════════════════════════════════════════
+    # SEKTION: ERWEITERTE EINSTELLUNGEN
+    # ════════════════════════════════════════════════════════════════════════
+    section_advanced:
+      name: "🔧 Erweiterte Einstellungen"
+      icon: mdi:wrench
+      collapsed: true
+      input:
+
+        base_topic:
+          name: Zigbee2MQTT Base-Topic
+          description: Das in Z2M konfigurierte Basis-Topic (ohne abschließenden Schrägstrich).
+          default: zigbee2mqtt
+          selector:
+            text:
+
+        hold_threshold:
+          name: Halte-Schwelle (ms)
+          description: >
+            Zeit in ms ohne Release, nach der Halten erkannt wird.
+          default: 300
+          selector:
+            number:
+              min: 100
+              max: 2000
+              unit_of_measurement: ms
+              step: 50
+              mode: slider
+
+        hold_step:
+          name: Dimm-Schrittweite (%)
+          description: >
+            Step-Loop Modus: Um wie viel % Helligkeit pro Schritt gedimmt wird.
+            Nicht relevant wenn brightness_move verwendet wird.
+          default: 5
+          selector:
+            number:
+              min: 1
+              max: 20
+              unit_of_measurement: "%"
+              step: 1
+              mode: slider
+
+        dim_interval:
+          name: Dimm-Intervall (ms)
+          description: >
+            Step-Loop Modus: Pause zwischen zwei Dimm-Schritten.
+            Höhere Werte = weniger Bus-Last, langsameres Dimmen.
+            Nicht relevant wenn brightness_move verwendet wird.
+          default: 150
+          selector:
+            number:
+              min: 50
+              max: 1000
+              unit_of_measurement: ms
+              step: 25
+              mode: slider
+
+        brightness_move_speed:
+          name: brightness_move Geschwindigkeit (units/s)
+          description: >
+            Geschwindigkeit beim Dimmen via brightness_move (nur für Z2M MQTT-Lampen).
+            Einheit: Zigbee-Helligkeitseinheiten/Sekunde (Bereich 0–254).
+            Beispiel: 100 = ca. 2,5 Sekunden von 0 auf 100%.
+          default: 100
+          selector:
+            number:
+              min: 10
+              max: 254
+              unit_of_measurement: units/s
+              step: 5
+              mode: slider
+
+        brightness_step_on:
+          name: Helligkeits-Schritt bei Kurzdruck Oben (%)
+          description: >
+            Um wie viel % die Helligkeit beim Kurzdruck Oben erhöht wird,
+            wenn das Licht bereits an ist und keine Szenen konfiguriert sind.
+            Nach 100% wird auf 1% zurückgesprungen.
+          default: 25
+          selector:
+            number:
+              min: 5
+              max: 50
+              unit_of_measurement: "%"
+              step: 5
+              mode: slider
+
+        force_step_loop:
+          name: Immer Step-Loop verwenden
+          description: >
+            Wenn aktiviert, wird auch bei MQTT-Lampen der Step-Loop
+            (brightness_step_pct) verwendet statt brightness_move.
+            Nützlich wenn brightness_move vom Gerät nicht unterstützt wird.
+          default: false
+          selector:
+            boolean:
+
 # ── Automation-Konfiguration ──────────────────────────────────────────────────
 
 mode: restart
@@ -413,6 +429,7 @@ max_exceeded: silent
 variables:
   # Einstellungen
   hold_threshold: !input hold_threshold
+  brightness_step_on: !input brightness_step_on
   hold_step: !input hold_step
   dim_interval: !input dim_interval
   brightness_move_speed: !input brightness_move_speed
@@ -734,12 +751,19 @@ action:
                 target:
                   entity_id: "{{ scene_to_activate }}"
 
-          # ── Oben: Licht AN + keine Szenen → turn_on (no-op) ─────────────
+          # ── Oben: Licht AN + keine Szenen → +25% Helligkeit (Wrap: >100% → 1%) ─
           - conditions: "{{ device_type == 'light' and direction == 'up' }}"
             sequence:
+              - variables:
+                  new_brightness_pct: >
+                    {% set current_pct = (state_attr(target_device, 'brightness') | int(0) / 255 * 100) | round(0) | int %}
+                    {% set new_pct = current_pct + brightness_step_on %}
+                    {{ 1 if new_pct > 100 else new_pct }}
               - service: light.turn_on
                 target:
                   entity_id: "{{ target_device }}"
+                data:
+                  brightness_pct: "{{ new_brightness_pct }}"
 
           # ── Unten: Licht ausschalten ──────────────────────────────────────
           - conditions: "{{ device_type == 'light' and direction == 'down' }}"
@@ -779,7 +803,7 @@ action:
 #        ├─ Tastenszene konfiguriert (press_action=scene) → scene.turn_on
 #        ├─ Oben + Licht AUS  → light.turn_on
 #        ├─ Oben + Licht AN + LRU-Szenen vorhanden → LRU-Szene aktivieren
-#        ├─ Oben + Licht AN + keine Szenen → light.turn_on (no-op)
+#        ├─ Oben + Licht AN + keine Szenen → +25% Helligkeit (>100% → 1%)
 #        ├─ Unten + Licht     → light.turn_off
 #        ├─ Cover ↑           → cover.open_cover
 #        └─ Cover ↓           → cover.close_cover
