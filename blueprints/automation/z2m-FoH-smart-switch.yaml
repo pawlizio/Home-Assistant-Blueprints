@@ -1,7 +1,7 @@
 # ══════════════════════════════════════════════════════════════════════════════
 #  Home Assistant Automation Blueprint
 #  EnOcean PTM215Z (Friends of Hue) – Zigbee2MQTT
-#  Gerätesteuerung: Kurzdruck (Toggle/Szene) · Halten (Dim/Tilt) · Wiederholt (Szenen)
+#  Gerätesteuerung: Kurzdruck (An/Szene-Wechsel) · Halten (Dim/Tilt)
 # ══════════════════════════════════════════════════════════════════════════════
 #
 #  INSTALLATION
@@ -17,12 +17,17 @@
 #  ┌────────────────────────────────────────────────────────────────────────┐
 #  │  Aktion                  │  Verhalten                                  │
 #  ├──────────────────────────┼─────────────────────────────────────────────┤
-#  │  Kurzdruck               │  elapsed ≥ repeat_threshold:                │
-#  │  (erste Betätigung)      │  → Toggle oder konfigurierte Szene          │
-#  │                          │  (separat für oben/unten konfigurierbar)    │
+#  │  Kurzdruck Oben          │  Tastenszene konfiguriert:                  │
+#  │                          │    → Szene aktivieren                       │
+#  │                          │  Keine Tastenszene:                         │
+#  │                          │    Licht AUS → einschalten                  │
+#  │                          │    Licht AN  → nächste LRU-Szene            │
+#  │                          │               (falls Szenen konfiguriert)   │
+#  │                          │               sonst: einschalten (no-op)    │
 #  ├──────────────────────────┼─────────────────────────────────────────────┤
-#  │  Wiederholter Druck      │  elapsed < repeat_threshold:                │
-#  │  (erneut innerhalb ~4s)  │  → Nächste LRU-Szene aktivieren            │
+#  │  Kurzdruck Unten         │  Tastenszene konfiguriert:                  │
+#  │                          │    → Szene aktivieren                       │
+#  │                          │  Keine Tastenszene → ausschalten            │
 #  ├──────────────────────────┼─────────────────────────────────────────────┤
 #  │  Halten oben             │  Helligkeit erhöhen                         │
 #  │                          │  MQTT-Lampe: brightness_move (einmalig)     │
@@ -41,8 +46,8 @@
 #  → Fallback auf Step-Loop per Haken "Immer Step-Loop" oder wenn Gerät
 #    kein brightness_move unterstützt.
 #
-#  SZENEN-LOGIK (Wiederholter Druck)
-#  ───────────────────────────────────
+#  SZENEN-LOGIK (Kurzdruck Oben bei eingeschaltetem Licht)
+#  ────────────────────────────────────────────────────────
 #  Kein externer Helper nötig.
 #  HA speichert Zeitstempel der letzten Aktivierung als state jeder Szene.
 #  Immer die am längsten nicht aktive Szene wird gewählt (LRU).
@@ -53,9 +58,9 @@ blueprint:
   name: "Z2M – Friends of Hue: Wippen-Gerätesteuerung (Licht/Rollladen)"
   description: >
     Gerätesteuerung mit dem EnOcean PTM215Z (Friends of Hue) über Zigbee2MQTT.
-    Kurzdruck: Toggle oder Szene (oben/unten separat konfigurierbar).
-    Wiederholter Druck: LRU-Szene. Halten: Dimmen/Fahren.
-    Automatisches brightness_move für Z2M-Lampen.
+    Kurzdruck Oben: einschalten (Licht aus) oder LRU-Szene (Licht an), oder
+    konfigurierte Tastenszene. Kurzdruck Unten: ausschalten oder Tastenszene.
+    Halten: Dimmen/Fahren. Automatisches brightness_move für Z2M-Lampen.
     Mindestversion: Home Assistant 2024.6.0.
   domain: automation
   homeassistant:
@@ -92,27 +97,13 @@ blueprint:
           name: Halte-Schwelle (ms)
           description: >
             Zeit in ms ohne Release, nach der Halten erkannt wird.
-          default: 500
+          default: 300
           selector:
             number:
               min: 100
               max: 2000
               unit_of_measurement: ms
               step: 50
-              mode: slider
-
-        repeat_threshold:
-          name: Wiederholungs-Schwelle (ms)
-          description: >
-            Liegt elapsed darunter, gilt der Druck als "wiederholter Druck"
-            → LRU-Szene. Liegt er darüber → Toggle/Szene (Kurzdruck).
-          default: 1500
-          selector:
-            number:
-              min: 500
-              max: 10000
-              unit_of_measurement: ms
-              step: 500
               mode: slider
 
         hold_step:
@@ -201,14 +192,17 @@ blueprint:
             text:
 
         wippe_1_press_up_action:
-          name: "Oben: Kurzdruck-Aktion"
-          description: Aktion beim ersten (nicht wiederholten) Kurzdruck auf die obere Taste.
-          default: toggle
+          name: "Oben: Kurzdruck-Aktion für Licht"
+          description: >
+            Aktion beim Kurzdruck auf die obere Taste.
+            "An / Szene (smart)": Licht aus → einschalten; Licht an → LRU-Szene.
+            "Szene aktivieren": immer die konfigurierte Tastenszene.
+          default: on_off
           selector:
             select:
               options:
-                - label: "Toggle (an/aus)"
-                  value: toggle
+                - label: "An / Szene wechseln (smart)"
+                  value: on_off
                 - label: "Szene aktivieren"
                   value: scene
 
@@ -224,14 +218,17 @@ blueprint:
               multiple: false
 
         wippe_1_press_down_action:
-          name: "Unten: Kurzdruck-Aktion"
-          description: Aktion beim ersten (nicht wiederholten) Kurzdruck auf die untere Taste.
-          default: toggle
+          name: "Unten: Kurzdruck-Aktion für Licht"
+          description: >
+            Aktion beim Kurzdruck auf die untere Taste.
+            "Aus": Licht ausschalten.
+            "Szene aktivieren": konfigurierte Tastenszene.
+          default: on_off
           selector:
             select:
               options:
-                - label: "Toggle (an/aus)"
-                  value: toggle
+                - label: "Aus"
+                  value: on_off
                 - label: "Szene aktivieren"
                   value: scene
 
@@ -247,10 +244,11 @@ blueprint:
               multiple: false
 
         wippe_1_scenes:
-          name: Szenen (wiederholter Druck)
+          name: Szenen (Kurzdruck Oben, Licht bereits an)
           description: >
-            Szenen die beim wiederholten Druck (LRU-Logik) aktiviert werden.
-            Optional – leer lassen wenn nicht gewünscht.
+            Szenen die beim Kurzdruck Oben aktiviert werden, wenn das Licht
+            bereits eingeschaltet ist (LRU-Logik: am längsten inaktive zuerst).
+            Optional – leer lassen wenn kein Szenen-Wechsel gewünscht.
           default: []
           selector:
             entity:
@@ -287,13 +285,13 @@ blueprint:
             text:
 
         wippe_2_press_up_action:
-          name: "Oben: Kurzdruck-Aktion"
-          default: toggle
+          name: "Oben: Kurzdruck-Aktion für Licht"
+          default: on_off
           selector:
             select:
               options:
-                - label: "Toggle (an/aus)"
-                  value: toggle
+                - label: "An / Szene wechseln (smart)"
+                  value: on_off
                 - label: "Szene aktivieren"
                   value: scene
 
@@ -307,12 +305,12 @@ blueprint:
 
         wippe_2_press_down_action:
           name: "Unten: Kurzdruck-Aktion"
-          default: toggle
+          default: on_off
           selector:
             select:
               options:
-                - label: "Toggle (an/aus)"
-                  value: toggle
+                - label: "Aus"
+                  value: on_off
                 - label: "Szene aktivieren"
                   value: scene
 
@@ -325,7 +323,7 @@ blueprint:
               multiple: false
 
         wippe_2_scenes:
-          name: Szenen (wiederholter Druck)
+          name: Szenen (Kurzdruck Oben, Licht bereits an)
           default: []
           selector:
             entity:
@@ -362,13 +360,13 @@ blueprint:
             text:
 
         wippe_both_press_up_action:
-          name: "Oben: Kurzdruck-Aktion"
-          default: toggle
+          name: "Oben: Kurzdruck-Aktion für Licht"
+          default: on_off
           selector:
             select:
               options:
-                - label: "Toggle (an/aus)"
-                  value: toggle
+                - label: "An / Szene wechseln (smart)"
+                  value: on_off
                 - label: "Szene aktivieren"
                   value: scene
 
@@ -382,12 +380,12 @@ blueprint:
 
         wippe_both_press_down_action:
           name: "Unten: Kurzdruck-Aktion"
-          default: toggle
+          default: on_off
           selector:
             select:
               options:
-                - label: "Toggle (an/aus)"
-                  value: toggle
+                - label: "Aus"
+                  value: on_off
                 - label: "Szene aktivieren"
                   value: scene
 
@@ -400,7 +398,7 @@ blueprint:
               multiple: false
 
         wippe_both_scenes:
-          name: Szenen (wiederholter Druck)
+          name: Szenen (Kurzdruck Oben, Licht bereits an)
           default: []
           selector:
             entity:
@@ -409,13 +407,12 @@ blueprint:
 
 # ── Automation-Konfiguration ──────────────────────────────────────────────────
 
-mode: single
+mode: restart
 max_exceeded: silent
 
 variables:
   # Einstellungen
   hold_threshold: !input hold_threshold
-  repeat_threshold: !input repeat_threshold
   hold_step: !input hold_step
   dim_interval: !input dim_interval
   brightness_move_speed: !input brightness_move_speed
@@ -452,56 +449,77 @@ trigger_variables:
 trigger:
   - platform: mqtt
     topic: "{{ base_topic }}/{{ controller }}"
-
-condition:
-  - condition: template
-    value_template: >
-      {{ trigger.payload_json.action is defined and
-         'press_' in trigger.payload_json.action }}
+    payload: true
+    value_template: "{{ 'press_' in value_json.action }}"
 
 action:
-  # ── Schritt 1: Alle relevanten Werte aus Payload und Konfiguration ableiten ──
+  # ── Trigger-Payload auswerten ──
   - variables:
+      trigger_payload: "{{ trigger.payload }}"
+      trigger_action: "{{ trigger.payload_json.action | default('N/A') }}"
+      trigger_elapsed: "{{ trigger.payload_json.elapsed | default(999999) | int }}"
       wippe: >
-        {% if trigger.payload_json.action in ['press_1', 'press_2'] %}wippe_1
-        {% elif trigger.payload_json.action in ['press_3', 'press_4'] %}wippe_2
-        {% elif trigger.payload_json.action in ['press_1_and_3', 'press_2_and_4'] %}wippe_both
+        {% if trigger_action in ['press_1', 'press_2'] %}wippe_1
+        {% elif trigger_action in ['press_3', 'press_4'] %}wippe_2
+        {% elif trigger_action in ['press_1_and_3', 'press_2_and_4'] %}wippe_both
         {% else %}unknown
         {% endif %}
       direction: >
-        {% if trigger.payload_json.action in ['press_1', 'press_3', 'press_1_and_3'] %}up
+        {% if trigger_action in ['press_1', 'press_3', 'press_1_and_3'] %}up
         {% else %}down
         {% endif %}
-      # elapsed: ms seit letztem MQTT-Event dieses Geräts.
-      # Default 999999 wenn elapsed fehlt (Z2M-Option nicht aktiviert).
-      elapsed: >
-        {{ trigger.payload_json.elapsed | default(999999) | int }}
       # Gerät für diese Wippe
       target_device: >
         {% if wippe == 'wippe_1' %}{{ wippe_1_device }}
         {% elif wippe == 'wippe_2' %}{{ wippe_2_device }}
         {% else %}{{ wippe_both_device }}
         {% endif %}
-      # Szenen (LRU) für diese Wippe
+      # Szenen (LRU) für diese Wippe – manuell konfiguriert
       target_scenes: >
         {% if wippe == 'wippe_1' %}{{ wippe_1_scenes }}
         {% elif wippe == 'wippe_2' %}{{ wippe_2_scenes }}
         {% else %}{{ wippe_both_scenes }}
         {% endif %}
+
+      # Auto-Erkennung von Szenen aus den Geräte-Informationen
+      auto_detected_scenes: >
+        {% if target_device is string and target_device != '' %}
+          {% set dev = device_id(target_device) %}
+          {% if dev %}
+            {{ device_entities(dev) | select('match', 'scene\..*') | list }}
+          {% else %}
+            []
+          {% endif %}
+        {% else %}
+          []
+        {% endif %}
+
+      # Effektive Szenen: Manuell konfiguriert oder Auto-erkannt
+      effective_target_scenes: >
+        {% if target_scenes | length > 0 %}
+          {{ target_scenes }}
+        {% else %}
+          {{ auto_detected_scenes }}
+        {% endif %}
+
       # Device-Typ
       device_type: >
         {% if target_device is string and target_device.startswith('light.') %}light
         {% elif target_device is string and target_device.startswith('cover.') %}cover
         {% else %}none
         {% endif %}
+
+      # Aktueller Lichtzustand (für Kurzdruck-Logik Oben)
+      is_light_on: >
+        {{ device_type == 'light'
+           and target_device is string
+           and target_device != ''
+           and states(target_device) == 'on' }}
+
       # Expected Release (z.B. press_1 → release_1)
-      expected_release: "{{ trigger.payload_json.action | replace('press_', 'release_') }}"
-      # Wiederholter Druck: elapsed unter Schwelle UND LRU-Szenen vorhanden
-      is_repeated_press: >
-        {{ elapsed < repeat_threshold and target_scenes | length > 0 }}
+      expected_release: "{{ trigger_action | replace('press_', 'release_') }}"
 
       # ── Z2M-Name für brightness_move ──
-      # Überschreibung aus Konfiguration oder automatisch aus HA-Gerätename
       z2m_name_override: >
         {% if wippe == 'wippe_1' %}{{ wippe_1_z2m_name }}
         {% elif wippe == 'wippe_2' %}{{ wippe_2_z2m_name }}
@@ -526,7 +544,7 @@ action:
            and target_device in integration_entities('mqtt')
            and z2m_name != '' }}
 
-      # ── Kurzdruck-Konfiguration für diese Richtung ──
+      # Kurzdruck-Aktions-Konfiguration
       press_action: >
         {% if wippe == 'wippe_1' %}
           {% if direction == 'up' %}{{ wippe_1_press_up_action }}
@@ -549,7 +567,7 @@ action:
           {% if direction == 'up' %}{{ wippe_both_press_up_scene }}
           {% else %}{{ wippe_both_press_down_scene }}{% endif %}
         {% endif %}
-      # Ist eine gültige Kurzdruck-Szene konfiguriert?
+      # Ist eine gültige Tastenszene konfiguriert?
       has_press_scene: >
         {{ press_action == 'scene'
            and press_scene is string
@@ -614,13 +632,11 @@ action:
               # ── Lampe via brightness_move (Z2M MQTT – einmalig) ──
               - conditions: "{{ device_type == 'light' and use_brightness_move }}"
                 sequence:
-                  # brightness_move starten (positiv = heller, negativ = dunkler)
                   - service: mqtt.publish
                     data:
                       topic: "{{ base_topic }}/{{ z2m_name }}/set"
                       payload: >
-                        {"brightness_move": {{ brightness_move_speed if direction == 'up' else -brightness_move_speed }}}
-                  # Warten bis Release kommt
+                        {"brightness_move_onoff": {{ brightness_move_speed if direction == 'up' else -brightness_move_speed }}}
                   - variables:
                       release_received: false
                   - repeat:
@@ -637,7 +653,6 @@ action:
                               {{ wait.trigger is not none and
                                  wait.trigger.payload_json.action is defined and
                                  wait.trigger.payload_json.action == expected_release }}
-                  # brightness_move stoppen
                   - service: mqtt.publish
                     data:
                       topic: "{{ base_topic }}/{{ z2m_name }}/set"
@@ -670,22 +685,36 @@ action:
                              wait.trigger.payload_json.action == expected_release) }}
 
     # ┌──────────────────────────────────────────────────────────────────────┐
-    # │  Release kam rechtzeitig → Kurzdruck oder wiederholter Druck?      │
-    # │  Entscheidung sofort via elapsed – kein weiterer Timeout.           │
+    # │  Release kam rechtzeitig → KURZDRUCK                                │
+    # │  Entscheidung basiert auf Lichtzustand + Konfiguration.             │
     # └──────────────────────────────────────────────────────────────────────┘
     default:
       - choose:
 
-          # ┌────────────────────────────────────────────────────────────────┐
-          # │  WIEDERHOLTER DRUCK – LRU-Szene aktivieren                    │
-          # │  elapsed < repeat_threshold UND LRU-Szenen konfiguriert       │
-          # └────────────────────────────────────────────────────────────────┘
-          - conditions: "{{ is_repeated_press }}"
+          # ── Konfigurierte Tastenszene hat höchste Priorität ──────────────
+          - conditions: "{{ has_press_scene }}"
+            sequence:
+              - service: scene.turn_on
+                target:
+                  entity_id: "{{ press_scene }}"
+
+          # ── Oben: Licht AUS → einschalten ────────────────────────────────
+          - conditions: >
+              {{ device_type == 'light' and direction == 'up' and not is_light_on }}
+            sequence:
+              - service: light.turn_on
+                target:
+                  entity_id: "{{ target_device }}"
+
+          # ── Oben: Licht AN + LRU-Szenen konfiguriert → nächste Szene ────
+          - conditions: >
+              {{ device_type == 'light' and direction == 'up' and is_light_on
+                 and effective_target_scenes | length > 0 }}
             sequence:
               - variables:
                   scene_to_activate: >
-                    {% set ns = namespace(scene=target_scenes[0], oldest=now()) %}
-                    {% for s in target_scenes %}
+                    {% set ns = namespace(scene=effective_target_scenes[0], oldest=now()) %}
+                    {% for s in effective_target_scenes %}
                       {% set t = states(s) %}
                       {% if t in ['unknown', 'unavailable'] %}
                         {# Noch nie aktiviert → definitiv älteste #}
@@ -705,40 +734,33 @@ action:
                 target:
                   entity_id: "{{ scene_to_activate }}"
 
-        # ┌──────────────────────────────────────────────────────────────────┐
-        # │  KURZDRUCK – Toggle oder konfigurierte Szene                    │
-        # │  elapsed ≥ repeat_threshold → erste / neue Betätigung           │
-        # └──────────────────────────────────────────────────────────────────┘
-        default:
-          - choose:
+          # ── Oben: Licht AN + keine Szenen → turn_on (no-op) ─────────────
+          - conditions: "{{ device_type == 'light' and direction == 'up' }}"
+            sequence:
+              - service: light.turn_on
+                target:
+                  entity_id: "{{ target_device }}"
 
-              # Konfigurierte Kurzdruck-Szene (oben oder unten, je nach direction)
-              - conditions: "{{ has_press_scene }}"
-                sequence:
-                  - service: scene.turn_on
-                    target:
-                      entity_id: "{{ press_scene }}"
+          # ── Unten: Licht ausschalten ──────────────────────────────────────
+          - conditions: "{{ device_type == 'light' and direction == 'down' }}"
+            sequence:
+              - service: light.turn_off
+                target:
+                  entity_id: "{{ target_device }}"
 
-              # Toggle Lampe
-              - conditions: "{{ device_type == 'light' }}"
-                sequence:
-                  - service: light.toggle
-                    target:
-                      entity_id: "{{ target_device }}"
+          # ── Cover öffnen (oben) ───────────────────────────────────────────
+          - conditions: "{{ device_type == 'cover' and direction == 'up' }}"
+            sequence:
+              - service: cover.open_cover
+                target:
+                  entity_id: "{{ target_device }}"
 
-              # Cover öffnen (oben)
-              - conditions: "{{ device_type == 'cover' and direction == 'up' }}"
-                sequence:
-                  - service: cover.open_cover
-                    target:
-                      entity_id: "{{ target_device }}"
-
-              # Cover schließen (unten)
-              - conditions: "{{ device_type == 'cover' and direction == 'down' }}"
-                sequence:
-                  - service: cover.close_cover
-                    target:
-                      entity_id: "{{ target_device }}"
+          # ── Cover schließen (unten) ───────────────────────────────────────
+          - conditions: "{{ device_type == 'cover' and direction == 'down' }}"
+            sequence:
+              - service: cover.close_cover
+                target:
+                  entity_id: "{{ target_device }}"
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  LOGIK-ÜBERSICHT
@@ -753,13 +775,14 @@ action:
 #    │   │               → einmalig senden → warten → stop (brightness_move: 0)
 #    │   └─ Licht     → Step-Loop (brightness_step_pct alle dim_interval ms)
 #    │
-#    └─ Release kam → KURZDRUCK oder WIEDERHOLT (sofort via elapsed)
-#        ├─ elapsed < repeat_threshold UND LRU-Szenen → WIEDERHOLT → LRU-Szene
-#        └─ elapsed ≥ repeat_threshold → KURZDRUCK
-#            ├─ Kurzdruck-Aktion = "Szene" + Szene konfiguriert → scene.turn_on
-#            ├─ Gerät = Lampe    → light.toggle
-#            ├─ Gerät = Cover ↑  → cover.open_cover
-#            └─ Gerät = Cover ↓  → cover.close_cover
+#    └─ Release kam → KURZDRUCK
+#        ├─ Tastenszene konfiguriert (press_action=scene) → scene.turn_on
+#        ├─ Oben + Licht AUS  → light.turn_on
+#        ├─ Oben + Licht AN + LRU-Szenen vorhanden → LRU-Szene aktivieren
+#        ├─ Oben + Licht AN + keine Szenen → light.turn_on (no-op)
+#        ├─ Unten + Licht     → light.turn_off
+#        ├─ Cover ↑           → cover.open_cover
+#        └─ Cover ↓           → cover.close_cover
 #
 #  BRIGHTNESS_MOVE ERKENNUNG
 #  ──────────────────────────
@@ -776,18 +799,18 @@ action:
 #  ACHTUNG: Wenn der HA-Gerätename nachträglich umbenannt wurde,
 #           weicht er vom Z2M-Namen ab → manuelle Überschreibung nötig.
 #
-#  LRU-SZENEN-LOGIK
-#  ────────────────
+#  LRU-SZENEN-LOGIK (Kurzdruck Oben bei eingeschaltetem Licht)
+#  ─────────────────────────────────────────────────────────────
 #  HA speichert Zeitstempel der letzten Aktivierung als state jeder Szene.
 #  unknown/unavailable → noch nie aktiviert → höchste Priorität (älteste).
 #
-#  Beispiel (repeat_threshold: 4000ms, 3 Szenen A/B/C):
+#  Beispiel (3 Szenen A/B/C, Licht AN):
 #    Szene A: 10:15  │  Szene B: 10:45  │  Szene C: unknown
-#    Druck 1 (elapsed 60s)  → Toggle  (neue Betätigung)
-#    Druck 2 (elapsed 1,0s) → Szene C (unknown = nie aktiviert)
-#    Druck 3 (elapsed 2,0s) → Szene A (10:15 < 10:45)
-#    Druck 4 (elapsed 2,0s) → Szene B (älteste verbleibende)
-#    Druck 5 (elapsed 60s)  → Toggle  (neue Betätigung)
+#    Druck 1 (Licht aus) → light.turn_on
+#    Druck 2 (Licht an)  → Szene C (unknown = nie aktiviert)
+#    Druck 3 (Licht an)  → Szene A (10:15 < 10:45)
+#    Druck 4 (Licht an)  → Szene B (älteste verbleibende)
+#    Druck 5 (Licht aus) → light.turn_on
 #
 # ══════════════════════════════════════════════════════════════════════════════
 #  TROUBLESHOOTING
@@ -807,28 +830,13 @@ action:
 #      zigbee2mqtt/[Z2M-Name]/set
 #    → Release-Event kommt nicht an → Z2M "elapsed" aktiviert?
 #
-#  PROBLEM: Szenen werden nie aktiviert (immer Toggle)
-#  ────────────────────────────────────────────────────
-#    → Z2M "elapsed" aktiviert? (Einstellungen → Erweitert) ← PFLICHT
-#    → repeat_threshold erhöhen (Standard: 4000ms)
-#    → Test: MQTT Explorer → Payload prüfen ob "elapsed" vorhanden
+#  PROBLEM: Szenen werden nie aktiviert (immer einschalten)
+#  ──────────────────────────────────────────────────────────
+#    → Licht beim Druck wirklich AN? (Zustand in HA prüfen)
+#    → Szenen unter "Szenen (Kurzdruck Oben, Licht bereits an)" konfiguriert?
+#    → Traces: Einstellungen → Automationen → Automation → Traces →
+#      Variable "is_light_on" und "effective_target_scenes" prüfen
 #
-#  PROBLEM: Kurzdruck-Szene wird nicht aktiviert
-#  ───────────────────────────────────────────────
-#    → Kurzdruck-Aktion = "Szene aktivieren" ausgewählt?
-#    → Szene für den jeweiligen Button (oben/unten) konfiguriert?
-#    → Szenen-Entity gültig? (scene.xxx)
-#
-#  PROBLEM: Halten wird nicht erkannt
-#  ────────────────────────────────────
-#    → Gerät für diese Wippe konfiguriert?
-#    → hold_threshold erhöhen?
-#    → Traces: Einstellungen → Automationen → Automation → Traces
-#
-#  PROBLEM: Toggle verzögert
-#  ──────────────────────────
-#    → Ist normal wenn keine LRU-Szenen konfiguriert sind und elapsed fehlt
-#    → Mit elapsed: Toggle reagiert sofort (kein Timeout mehr)
-#    → Z2M "elapsed" aktiviert? ← PFLICHT
-#
-# ══════════════════════════════════════════════════════════════════════════════
+#  PROBLEM: Tastenszene wird nicht aktiviert
+#  ──────────────────────────────────────────
+#    → Kurzdruck-Aktion = "Szene aktivieren" aus
